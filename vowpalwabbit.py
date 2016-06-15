@@ -1,9 +1,10 @@
 #!/bin/env python
 
 import os, re, numpy as np, collections
-from scikits.learn.feature_extraction.text.sparse import CountVectorizer
-from scikits.learn.feature_extraction.text import WordNGramAnalyzer
-from scikits.learn.base import BaseEstimator
+from sklearn.feature_extraction.text import CountVectorizer
+#from sklearn.feature_extraction.text import WordNGramAnalyzer
+
+from sklearn.base import BaseEstimator
 from scipy.sparse import coo_matrix
 from collections import defaultdict
 from pandas import *
@@ -18,10 +19,12 @@ class VowpalWabbit(BaseEstimator):
   label_section_regex = re.compile("([^ ]+)(?: ([^ ]+))?(?: ([^ ]+))?")
   feature_section_regex = re.compile("([^ ]+)[ ]+(.*)")
   feature_regex = re.compile("([^:]+)(?::(.*))?")
-  default_analyzer = WordNGramAnalyzer(min_n=1, max_n=1)
+  #default_analyzer = WordNGramAnalyzer(min_n=1, max_n=1)
+  default_analyzer = CountVectorizer()
 
   def __init__(self, analyzer=default_analyzer, min_support=0.001):
-    self.analyzer = analyzer
+    self.analyze = analyzer.build_analyzer()
+
     self.min_support = min_support
     self.namespaces = set()
     self.dfs = defaultdict(lambda: defaultdict(float))
@@ -34,11 +37,14 @@ class VowpalWabbit(BaseEstimator):
       sections = line.strip().split('|')
       assert len(sections) >= 2, "No delimiter | found in line %s" % line
       label,importance,tag = self.label_section_regex.match(sections[0]).groups()
+      
       features = defaultdict(lambda: defaultdict(float))
 
       for feature_section in sections[1:]:
         feature_section = feature_section.strip()
-        assert " " in feature_section, "No space delim found in section: %s" % feature_section
+        
+        if not " " in feature_section: continue
+
         ns,feature_group = self.feature_section_regex.match(feature_section).groups()
 
         #simplyfing assumption: any namespace that with >= 1 valued feature does not contain text
@@ -52,8 +58,12 @@ class VowpalWabbit(BaseEstimator):
             features[ns][name] += value
         #otherwise if no values, treat as text
         else: 
-          for term in set(self.analyzer.analyze(feature_group)):
-            features[ns][term] += 1
+
+          for term in feature_group.split(" "):
+            term_count=1
+            if ":" in term:
+                term,term_count=term.split(":")
+            features[ns][term] += int(term_count)
 
       yield label,importance,tag,features
 
@@ -79,7 +89,7 @@ class VowpalWabbit(BaseEstimator):
     for label, imp, tag, features in self.parse_file(filename):
       label = int(label)
       labels.append(label); 
-      imps.append(float(imp)); 
+      imps.append(float(imp if imp is not None else '1.0')); 
       tags.append(tag)
       features_by_ns.append(features)
       features_flat = self.flatten(features,keys_to_exclude=set(ns_to_exclude_from_df))
